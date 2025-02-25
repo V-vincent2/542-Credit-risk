@@ -1,0 +1,737 @@
+---
+title: "542_credit_projects_dataandmodel"
+author: "Vincent Zhang"
+date: "2024-11-25"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(car)
+library(knitr)
+
+#odds plot function from class
+OddsPlot <- function(var,event,bins){
+  #Sort variable and events 
+  a <- order(var)
+  var <- var[a]
+  event <- event[a]
+  logOdds <- 0
+  binAvg <- 0 
+  prob <- 0
+  binSize <- length(var)/bins
+  for(i in 1:bins){
+    prob <- sum(event[(1+(i-1)*binSize):(i*binSize)])/binSize
+    logOdds[i]<- log(prob/(1-prob))
+    binAvg[i] <- sum(var[(1+(i-1)*binSize):(i*binSize)])/binSize
+  }
+  plot(binAvg,logOdds,xlab = "")
+  #return()
+}
+```
+
+```{r 2afunc}
+#2a
+#function to calculate K-S statitics
+
+ks_function <- function(predicted_probs, actual_outcomes) {
+  
+  #store the data
+  temp <- data.frame(predicted_probs, actual_outcomes)
+  
+  # step 1: sort the date by the predictated probabilities from high to low
+  temp <- temp[order(-temp$predicted_probs), ] #use order to sort all the columns using pred
+  
+  # step 2 and 3: calculation cdf of CHD and non-CHD
+  temp$cum_1 <- cumsum(temp$actual_outcomes) / sum(temp$actual_outcomes) #cumalitive total correct  for 1/ total chd
+  temp$cum_0 <- cumsum(1-temp$actual_outcomes) / sum(1-temp$actual_outcomes) # -cumalitive total correct for 0/-total non
+  
+  # Step 4: calculate maximum difference between the two cumulative distributions
+  ks_stat <- max( abs(temp$cum_1 - temp$cum_0))
+  
+  #which is the ks stat
+  return(ks_stat)
+}
+
+
+```
+
+
+```{r 2 prepare}
+fred_data <- read.csv("fredgraph_data.csv")
+#data cleaning
+fred_data <- fred_data %>%
+  mutate(across(c(CPIAUCSL, UNRATE, GDP, GS10, CNP16OV, M2SL, UMCSENT, TOTRESNS, FEDFUNDS), as.numeric))
+#make the annual percent change for the data
+fred_data <- fred_data %>%
+  mutate(
+    GDP_change = (GDP - lag(GDP)) / lag(GDP) *100,
+    Pop_change = (CNP16OV - lag(CNP16OV)) / lag(CNP16OV) *100,
+    CPI_change = (CPIAUCSL - lag(CPIAUCSL)) / lag(CPIAUCSL) *100,
+    Unemp_change = (UNRATE - lag(UNRATE)) / lag(UNRATE) *100,
+    GS10_change = (GS10 - lag(GS10)) / lag(GS10) *100,
+    M2SL_change = (M2SL - lag(M2SL)) / lag(M2SL) *100,
+    UMCSENT_change = (UMCSENT - lag(UMCSENT)) / lag(UMCSENT) *100,
+    TOTRESNS_change = (TOTRESNS - lag(TOTRESNS)) / lag(TOTRESNS) *100,
+    FEDFUNDS_change = (FEDFUNDS - lag(FEDFUNDS)) / lag(FEDFUNDS) *100
+  )
+
+#get rid of the na columns
+fred_data <- fred_data %>%
+  filter(!is.na(GDP_change) & !is.na(Pop_change) & !is.na(CPI_change) &
+           !is.na(Unemp_change) & !is.na(GS10_change))
+```
+
+
+
+In the beginning I did some data cleaning, getting rid of some NA values in the beginning and at the end after creating the annual change. 
+
+
+a).  Multivariate regression model, VIF, and plot for the GDP against population, unemployment, GS10, and CPI.
+```{r 2a}
+### a) regress annual percentage change 
+modela <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change, data = fred_data)
+
+#summary output, variance inflation factors, and a plot of the actual and fitted values
+summary(modela)
+vif(modela)
+plot(fred_data$GDP_change, fitted(modela),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+#looks like there is an outlier in the plot for the analysis, since the assignment didn't
+#ask for outlier removal, we will proceed with an answer for both cases 
+plot(modela)
+
+
+
+
+#from plot we can see that it is far from the cluster and impact the regression a lot
+index <- which.min(fitted(model))
+fred_data[index, c("DATE", "GDP_change")]
+fitted(model)[index]
+#this is the point
+fred_data_no_outlier <- fred_data[-index, ]
+modela1 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change, data = fred_data_no_outlier)
+
+#summary output, variance inflation factors, and a plot of the actual and fitted values
+summary(modela1)
+vif(modela1)
+plot(fred_data_no_outlier$GDP_change, fitted(modela1),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+# good now !!!
+```
+
+
+When looking at the model, VIF, and plot, we can see that all the coefficients are positive other than the unemployment which all makes sense since unemployment decreases gdp and others have somewhat of an increase on the production levels.  The GS10 is not significant. All the VIF are less than 2, no multicollinearity. However, when looking at the plot of actual vs fitted and other plots for the models, we see an “outlier” which is very far from the cluster, very extreme fitted value and very high leverage. To my guess and verification, it was the Covid 2020 Q1 that caused the extremity. I have created another set of model summaries and plot for the set without this “outlier”.
+
+R^2 0.5582, adjusted R^2: 0.5518, no outlier: 0.5298, adjusted R^2: 0.523
+
+it may look like it is better without outlier, but the R^2 show otherwise. 
+
+
+For the selection of covariate, I am using M2, consumer sentiment, total reserves of depository, and federal fund rate.  The M2 money supply could be correlated to GDP as it is another tool used by the government to stimulate the economy, consumer sentiment is like consumer confidence,  total reserve of depository is the reserve depository requirement for banks, and federal fund rate is the other tool for short-term economic stimulation. These covariates are hard to find since there aren’t many that don't have high VIF and are not part of GDP.  The date requirements since 1953 are almost impossible to fulfill without giving up a few years of data since some of these covariates don’t begin until around the 1960s.
+```{r 2bm2}
+#missing some early data, moving the window to 1960s
+fred_data_clean_no_na <- na.omit(fred_data)
+fred_data_clean_no_na_no_outlier <- na.omit(fred_data_no_outlier)
+
+#M2
+modelb1 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ M2SL_change, data = fred_data_clean_no_na)
+summary(modelb1)
+vif(modelb1)
+plot(fred_data_clean_no_na$GDP_change, fitted(modelb1),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+
+modelb2 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ M2SL_change, data = fred_data_clean_no_na_no_outlier)
+summary(modelb2)
+vif(modelb2)
+plot(fred_data_clean_no_na_no_outlier$GDP_change, fitted(modelb2),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+```
+
+
+
+
+M2 is a good covariate, significant and low VIF, much more significant when including the outlier point
+R^2 0.6156, adjusted R^2: 0.608, no outlier: 0.5521, adjusted R^2: 0.5432
+
+the R^2 all improved the original by at least 2.5%.
+
+
+Consumer Sentiment
+```{r 2bcon}
+#consumer Sentiment
+modelb3 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ UMCSENT_change, data = fred_data_clean_no_na)
+summary(modelb3)
+vif(modelb3)
+plot(fred_data_clean_no_na$GDP_change, fitted(modelb3),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+
+modelb4 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ UMCSENT_change, data = fred_data_clean_no_na_no_outlier)
+summary(modelb4)
+vif(modelb4)
+plot(fred_data_clean_no_na_no_outlier$GDP_change, fitted(modelb4),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+```
+
+
+
+
+The consumer sentiment covariate is not as good as M@, but it is still significant, and the VIFs are lower than 2.
+R^2 0.5737, adjusted R^2: 0.5652, no outlier: 0.5467, adjusted R^2: 0.5376
+
+the R^2 improved slightly.
+
+total reserve
+```{r 2btotr}
+#consumer Sentiment
+modelb5 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ TOTRESNS_change, data = fred_data_clean_no_na)
+summary(modelb5)
+vif(modelb5)
+plot(fred_data_clean_no_na$GDP_change, fitted(modelb5),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+
+modelb6 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ TOTRESNS_change, data = fred_data_clean_no_na_no_outlier)
+summary(modelb6)
+vif(modelb6)
+plot(fred_data_clean_no_na_no_outlier$GDP_change, fitted(modelb6),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+```
+
+
+Unfortunately, the total reserve is not significant here, with a p-value of 0.12, but the VIF is lower than 2.
+
+R^2 0.5629, adjusted R^2: 0.5542 , no outlier: 0.5264, adjusted R^2: 0.517
+The R^2 improved for the data with outlier and didn't improve for without outlier.
+
+
+Fed Funds
+```{r 2bfed}
+#consumer Sentiment
+modelb7 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ FEDFUNDS_change, data = fred_data_clean_no_na)
+summary(modelb7)
+vif(modelb7)
+plot(fred_data_clean_no_na$GDP_change, fitted(modelb7),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+
+modelb8 <- lm(GDP_change ~ Pop_change + CPI_change + Unemp_change + GS10_change+ FEDFUNDS_change, data = fred_data_clean_no_na_no_outlier)
+summary(modelb8)
+vif(modelb8)
+plot(fred_data_clean_no_na_no_outlier$GDP_change, fitted(modelb8),
+     xlab = "Actual", 
+     ylab = "Fitted", 
+     main = "Actual vs Fitted")
+```
+
+
+From class, we know that the credit gradings are depending on the credit scores, debt to income ratio, the length, rates, and homeowner ships. We can try to find some factors in this data set that is similar to this to create the best fit for regression.  I would choose the sub class as a variate since it is very descriptive already from the credit score and other variables like FICO score, income debt ratio, delinquencies history, credit inquiries, and even the accounts open.  I expect the higher the score, lower the probability to default. In addition, I would like to not choose variables that is part of the grading scale for credit grades, so maybe homeownership which is a good indication of the loan ownership and asset ownership of the borrower. I expect the homeownership to have lower probabiliy of default, then mortgage, then renting. Mortgage is better than renting because one could use mortgage as an asset to but it is uncertain until we see the result. Furthermore, same as second one's idea. I would choose loan amount, since it is not a part of the credit grades, and i think loan amount is very important to a loan would default or not. I think higher the loan amount will coordinate to higher probability of default since it will be harder to pay back.Other covariates I can consider are installments, purpose, and emp_length, and of course I would use the transformed varietes.
+
+
+
+```{r 3c1}
+#fit using glm, let's use all the variables, but no transformed ones yet
+model_3 <- glm(Default ~ sub_grade + home_ownership + loan_amnt + purpose + emp_length,
+               family = 'binomial', data = lend_data)
+summary(model_3)
+vif(model_3)
+```
+
+For the first try, it is not bad. The subgrade performed the way we wanted to with most of the factors are significant besides A grade,but looks like homeowner other does not perfom well, and most of the purpose and maybe some of the employment length was not as significant as others like 6, 7, and 8 years.
+For revision, I am thinking about adding all the transformed variables, and getting rid of the purpose varible and even changing the emploiyment length variable to three categories. No multicollinerities which is good(all VIF < 2), AIC:13478
+
+
+
+```{r 3c2}
+#transform the employ length varaible
+lend_data <- lend_data %>%
+  mutate(emp_length_cat = case_when(
+    emp_length %in% c("< 1 year", "1 year", "2 years", "3 years", "4 years") ~ "Short",
+    emp_length %in% c("5 years", "6 years", "7 years", "8 years", "9 years") ~ "Medium",
+    emp_length == "10+ years" ~ "Long",
+    TRUE ~ NA_character_  
+  ))
+
+#turns out all the fico differences are just 4, so we cant look at that variable
+
+#second fit
+model_3_2 <- glm(Default ~ sub_grade_condensed + home_ownership + loan_amnt + emp_length_cat + delinq_history, family = 'binomial', data = lend_data)
+summary(model_3_2)
+vif(model_3_2)
+```
+
+The second model actually worked after we got rid of the FICO score difference variate. I found out all the difference are just 4 so we can't use that as a variable, but looking at everything else, we found that every variable are mostly significant besides the employment length, so we have to get rid of that too. AIC: 13342
+
+
+```{r 3c3}
+#third fit
+model_3_3 <- glm(Default ~ sub_grade_condensed + home_ownership + loan_amnt + delinq_history, family = 'binomial', data = lend_data)
+summary(model_3_3)
+vif(model_3_3)
+```
+
+The third model surprisingly has the highest AIC which I think we might've gotten rid of too many variates. AIC: 13519.
+
+
+3d)
+My best model is the second trial run using the transformed variable of grade condensed, employment length categorized, and deliquent indicator. For the non transformed ones I included home ownership and loan amount for the logistic model.I included all the variables I think would makes sense at the beginning and modify them or get rid of them to find the best model.
+
+```{r 3d}
+#best model
+model_3_2 <- glm(Default ~ sub_grade_condensed + home_ownership + loan_amnt + emp_length_cat + delinq_history, family = 'binomial', data = lend_data)
+summary(model_3_2)
+vif(model_3_2)
+
+```
+
+
+```{r 2bss}
+#use the chd data from lecture 2
+chd_data<- read.csv("chdage.csv")
+
+#logistical model
+res <- glm(CHD ~ Age, data = chd_data, family = "binomial")
+
+predicted_probs <- predict(res, type = "response")
+
+ks_stat <- ks_function(predicted_probs, chd_data$CHD)
+ks_stat
+```
+
+
+```{r 22c}
+lend_data <- read.csv("LC2007-2011 (2).csv", stringsAsFactors = FALSE) #load
+
+#data clean
+#since there is % in them, we need to clean and change revol util
+lend_data$revol_util <- as.numeric(gsub("%", "", lend_data$revol_util))/100
+#from problem set 1
+lend_data <- lend_data %>%
+  mutate(Default = ifelse(loan_status %in% c('Fully Paid', 'Does not meet current credit policy. Status:Fully Paid'), 0, 1))
+#omit NA from revol_util
+lend_data <- lend_data %>%
+  filter(!is.na(revol_util))
+
+OddsPlot(lend_data$revol_util,lend_data$Default,20)
+```
+
+
+Looks like there is an overall positive linear relationship between the empirical log odds of default against the revolving line utilization in 20 bin. This positive relationship, upward sloping trend shows that higher use of utilization of line increases the log odds of default. Looking at it closer, we can see that the lowest bin has a quite high log odds too maybe that signal with little to no credit line may indicate that person doesn't have credit line might also have higher credit risk than those who do, and the slope of 5% to 40% of the revolving line utilization also feels more steep than 45% - 100%, so the linear relationship derivative might be different too.
+
+
+
+```{r 2dss}
+# 2d
+# Use Spline-based logistic regression for revolving utilization
+RevolUtil_Spline <- lend_data$revol_util - 0.06
+RevolUtil_Spline[RevolUtil_Spline < 0] <- 0  #spline to 0 for values below 6%
+
+#fit model
+res_revol_util <- glm(Default ~ revol_util + RevolUtil_Spline, data = lend_data, family = "binomial")
+summary(res_revol_util)
+
+#together plots
+OddsPlot(lend_data$revol_util, lend_data$Default, 20)
+points(lend_data$revol_util, log(res_revol_util$fitted.values / (1 - res_revol_util$fitted.values)), col = 2)
+title(xlab = "Revolving Utilization")
+
+```
+
+
+
+to do this problem we use a function and do the separate calculation for each field and return a df for the results for each month, and I have started at month0 to initialize some values for calculations like the BMA example in the excel sheet.
+```{r 1as}
+#using function for easier implementation
+calculate_mortgage_cash_flows <- function(WAC, WAM, severity, beginning_balance,
+                                          time_to_recovery, default_rate, prepayment_rate) {
+    # input constant
+    c <- WAC       # WAC 
+    M0 <- WAM      
+    net_mortgage_rate <- WAC / 12  
+    n_months <- WAM
+    
+    
+    # Initialize 
+    PB <- numeric(n_months + 1) # performing balance +1 for prep along at month 0
+    New_Defaults <- numeric(n_months)
+    AF <- numeric(n_months + 1) # Amortization Factor 
+    Vol_Prepayments <- numeric(n_months)
+    FCL <- numeric(n_months + 1) # in foreclosure
+    ADB <- numeric(n_months + 1) # amortized default balance
+    Expected_Amortization <- numeric(n_months) 
+    Actual_Amortization <- numeric(n_months)
+    Expected_Interest <- numeric(n_months)
+    Interest_Lost <- numeric(n_months)
+    Actual_Interest <- numeric(n_months)
+    Amort_From_Defaults <- numeric(n_months)
+    Principal_Loss <- numeric(n_months + 1)
+    Principal_Recovery <- numeric(n_months + 1)
+
+    #Initial values at Month 0 as shown on excel
+    PB[1] <- beginning_balance
+    AF[1] <- 1  
+
+    # varable to save space
+    one_plus_c_over_12 <- 1 + c / 12
+    denom_AF <- 1 - one_plus_c_over_12^(-M0)
+
+    for (i in 1:n_months) {
+        # remain months
+        M_i <- M0 - (i - 1)
+
+        # af
+        numer_AF <- 1 - (1 + c * 100 / 1200)^(-(M0 - i))
+        denom_AF <- 1 - (1 + c * 100 / 1200)^(-M0)
+        AF[i+1] <- numer_AF / denom_AF
+
+        # Prev PB
+        PB_prev <- PB[i]
+
+        # New Defaults
+        New_Defaults[i] <- PB_prev * default_rate[i]
+
+        # Voluntary Prepayments
+        Vol_Prepayments[i] <- PB_prev * (AF[i + 1] / AF[i]) * prepayment_rate[i]
+
+        # ADB
+        if (i > (time_to_recovery)) { #if  13 > 12  so we indexing adb at 14
+            default_index <- i - time_to_recovery #13 - 12 = 1
+            ADB[i+1] <- New_Defaults[default_index]  * (AF[i] / AF[default_index]) #new default at 2 index
+        } else {
+            ADB[i+1] <- 0
+        }
+
+
+        # Amortization from Defaults
+        Amort_From_Defaults[i] <- (New_Defaults[i] + FCL[i] - ADB[i + 1]) * (1 - AF[i + 1] / AF[i])
+
+        # In Foreclosure
+        FCL[i + 1] <- FCL[i] + New_Defaults[i] - Amort_From_Defaults[i] - ADB[i + 1]
+
+        # Expected Amortization
+        Expected_Amortization[i] <- (PB_prev + FCL[i] - ADB[i + 1]) * (1 - AF[i + 1] / AF[i])
+
+        # Actual Amortization
+        Actual_Amortization[i] <- (PB_prev - New_Defaults[i]) * (1 - AF[i + 1] / AF[i])
+
+        # Expected Interest
+        Expected_Interest[i] <- (PB_prev + FCL[i]) * net_mortgage_rate
+
+        # Interest Lost
+        Interest_Lost[i] <- (New_Defaults[i] + FCL[i]) * net_mortgage_rate
+
+        # Actual Interest
+        Actual_Interest[i] <- Expected_Interest[i] - Interest_Lost[i]
+
+        # Performing Balance
+        PB[i + 1] <- PB_prev - New_Defaults[i] - Vol_Prepayments[i] - Actual_Amortization[i]
+        
+        # Principal Loss and Recovery
+        if (i >= time_to_recovery) {
+            recovery_index <- i + 1
+            default_index <- i - time_to_recovery 
+            prior_new_default <- New_Defaults[default_index]
+            Principal_Loss[recovery_index] <- min(prior_new_default * severity, ADB[recovery_index])
+            Principal_Recovery[recovery_index] <- max(ADB[recovery_index] - Principal_Loss[recovery_index], 0)
+        }
+    }
+
+    # Prepare results and put in df
+    results <- data.frame(
+        Month = 0:n_months,
+        Performing_Balance = PB[1:(n_months + 1)],
+        New_Defaults = c(0, New_Defaults),
+        In_Foreclosure = FCL[1:(n_months + 1)],
+        Amort_Factor = AF[1:(n_months + 1)],
+        Expected_Amortization = c(0, Expected_Amortization),
+        Voluntary_Prepayments = c(0, Vol_Prepayments),
+        Amort_From_Defaults = c(0, Amort_From_Defaults),
+        Actual_Amortization = c(0, Actual_Amortization),
+        Expected_Interest = c(0, Expected_Interest),
+        Interest_Lost = c(0, Interest_Lost),
+        Actual_Interest = c(0, Actual_Interest),
+        Principal_Recovery = Principal_Recovery[1:(n_months + 1)],
+        Principal_Loss = Principal_Loss[1:(n_months + 1)],
+        Amort_Default_Balance = ADB[1:(n_months + 1)]
+    )
+
+    return(results)
+}
+
+```
+
+
+```{r 1a verify}
+#Inputs from the sheets
+###
+# WAC <- 0.08                
+# WAM <- 360                 
+# severity <- 0.20           
+# beginning_balance <- 100000000 
+# time_to_recovery <- 12     
+# default_rate <- rep(0.01, WAM)    
+# prepayment_rate <- rep(0.01, WAM)  
+# 
+# results <- calculate_mortgage_cash_flows(
+#     WAC = WAC,
+#     WAM = WAM,
+#     severity = severity,
+#     beginning_balance = beginning_balance,
+#     time_to_recovery = time_to_recovery,
+#     default_rate = default_rate,
+#     prepayment_rate = prepayment_rate
+# )
+# 
+# print(results[1:16, ])
+
+# 
+
+x <- c(1,2,3,4)
+mean(x)
+sd(x)
+length(x)
+
+```
+
+
+
+now we use the inputs given, 100% PSA in class means the prepayment rate increase with rate 0.2% until 0.006 from month 31
+and we change from the annualized default rate
+
+```{r 1bs}
+
+WAC <- 0.04              
+WAM <- 360                
+severity <- 0.30          
+beginning_balance <- 100000000  
+time_to_recovery <- 12    
+
+#Prepayment Rate based on 100% PSA
+prepayment_rate <- numeric(WAM)
+for (m in 1:WAM) {
+    if (m <= 30) {
+        prepayment_rate[m] <- 0.002 * m  # 0.2% per month
+    } else {
+        prepayment_rate[m] <- 0.006      # 6% per month from Month 31 onwards
+    }
+}
+
+# Define Default Rate from  1% annualized CDR
+default_rate <- rep(0.01 / 12, WAM)  # Approximately 0.0833% per month
+
+results <- calculate_mortgage_cash_flows(
+    WAC = WAC,
+    WAM = WAM,
+    severity = severity,
+    beginning_balance = beginning_balance,
+    time_to_recovery = time_to_recovery,
+    default_rate = default_rate,
+    prepayment_rate = prepayment_rate
+)
+
+print(results[1:25, ])
+
+```
+
+
+
+```{r 1css}
+
+# 1. sum the cf for this part
+results$Total_CF <- results$Voluntary_Prepayments + 
+                    results$Amort_From_Defaults + 
+                    results$Actual_Amortization + 
+                    results$Principal_Recovery + 
+                    results$Interest_Lost + 
+                    results$Actual_Interest
+
+# Flat Spot Rate Curve at 3% with semi annual compounding
+# DF(m) = (1 + 0.03 / 2)^(-2 * (m / 12)) = (1.015)^(-m / 6)
+
+compute_discount_factors <- function(months, spot_rate) {
+    r <- spot_rate
+    DF <- (1 + r / 2)^(-2 * (months / 12))
+    return(DF)
+}
+
+spot_rate <- 0.03  
+months <- results$Month
+
+#2 discount the cashflows
+results$Discount_Factor <- compute_discount_factors(months, spot_rate)
+results$PV_CF <- results$Total_CF * results$Discount_Factor
+
+#sum
+PV_total1 <- sum(results$PV_CF[-1])   #index 1 is month 0
+
+cat("PV of Cash Flows:", round(PV_total1, 2), "\n")
+
+
+```
+The PV is over 100 mill, since the WAC is higher than the spot rate, that means the MBS should have a higher return and thus a pv that is higher than 100 mil but still close.
+
+
+
+```{r 1dss}
+
+WAC <- 0.04              
+WAM <- 360                
+severity <- 0.30          
+beginning_balance <- 100000000  
+time_to_recovery <- 12    
+
+# Define Prepayment Rate based on 50% PSA
+prepayment_rate <- numeric(WAM)
+for (m in 1:WAM) {
+    if (m <= 30) {
+        prepayment_rate[m] <- 0.002 * m * 0.5# 0.2% per month
+    } else {
+        prepayment_rate[m] <- 0.006  *0.5   # 6% per month from Month 31 onwards
+    }
+}
+
+# Define Default Rate based on 1% annualized CDR
+default_rate <- rep(0.01 / 12, WAM)  # Approximately 0.0833% per month
+
+results <- calculate_mortgage_cash_flows(
+    WAC = WAC,
+    WAM = WAM,
+    severity = severity,
+    beginning_balance = beginning_balance,
+    time_to_recovery = time_to_recovery,
+    default_rate = default_rate,
+    prepayment_rate = prepayment_rate
+)
+
+
+results$Total_CF <- results$Voluntary_Prepayments + 
+                    results$Amort_From_Defaults + 
+                    results$Actual_Amortization + 
+                    results$Principal_Recovery + 
+                    results$Interest_Lost + 
+                    results$Actual_Interest
+
+
+spot_rate <- 0.04  # new annual spot rate
+
+
+months <- results$Month
+
+results$Discount_Factor <- compute_discount_factors(months, spot_rate)
+
+results$PV_CF <- results$Total_CF * results$Discount_Factor
+
+
+PV_total2 <- sum(results$PV_CF[-1])   #index 1 is month 0
+
+cat("PV of Cash Flows:", round(PV_total2, 2), "\n")
+
+
+```
+This makes sense since the spot rate increased, which is now the same as WAC which erased the premium so now the PV works.
+
+
+
+Effective Duration is percent change in price for 1% decrease in interest rates, we have the price and balance for 4% interest rates and 3 % interest rates, even though the prepayments psa are different, we assume that is because of the change of the spot rates since the spot rate change does change the prepayment rates which makes sense. Also the instructions asked us to use the answers from part c and part d which we will do that then.
+
+```{r 1es}
+percent_change =(PV_total2/100000000* 100 - PV_total1/100000000* 100) / (PV_total1/100000000* 100) * 100
+
+cat("Effective Duration:", round(percent_change, 2), "\n")
+```
+
+
+Using the Vasicek model to calculate the unexpected losses, what is credit risk Economic Capital for this portfolio at the 99.9% confidence interval. 
+
+a) First we need to calculate the unexpected loss, we times the Loss give default with stressed probability of default or probability of default at confidence interval. 
+
+```{r 3a}
+#Correlation
+rho = .15
+#Loss given default
+LGD = .30
+#Probability of Default
+PD = .05
+
+#confidence Interval
+CI = 0.999
+
+stress_default_prob = pnorm((qnorm(PD) + sqrt(rho) * qnorm(CI)) / sqrt(1 - rho))
+
+unexpected_loss <- LGD * stress_default_prob 
+
+cat("The unexpected Loss at CI of 99.9% is:", round(unexpected_loss, 4), "\n")
+
+```
+
+now we found the unexpected loss and stressed probability of default at 99.9% CI, we can use that the given PD to find economical capital
+```{r 3a_mores}
+el <- PD * LGD
+ec <- unexpected_loss - el
+
+cat("The Economical capital  at CI of 99.9% is:", round(ec, 4), "\n")
+
+```
+
+
+We just need to change the confidence interval for the problem to 99.97, but to make the process more fluid and faster for c and d, gonna make a small and quick function to smooth the process
+```{r 3bs}
+#function
+vasicek_economic_capital <- function(pd, lgd, rho, confidence_level) {
+  #expected loss
+  el <- pd * lgd
+  
+  # unexpected loss
+  unexpected_loss <- lgd * pnorm((qnorm(pd) + sqrt(rho) * qnorm(confidence_level)) / sqrt(1 - rho))
+  
+  # Economic Capital
+  ec <- unexpected_loss - el
+  return(ec)
+}
+
+#verify
+#vasicek_economic_capital(0.05, 0.3,0.15,0.999)
+
+ec_97 <- vasicek_economic_capital(0.05, 0.3,0.15,0.9997)
+cat("The Economical capital  at CI of 99.97% is:", round(ec_97, 4), "\n")
+```
+
+follow the code from class and plot from pd ranges
+```{r 3cs}
+#plot pd over 0.0001 to 50%
+pd_values <- seq(0.001, 0.5, length.out = 500)
+
+ec_vs_pd <- sapply(pd_values, function(pd_val) vasicek_economic_capital(pd_val, 0.3, 0.15, 0.999))
+
+plot(pd_values * 100, ec_vs_pd, type = "l", col = "blue", lwd = 2,
+     xlab = "Probability of Default (PD %)", ylab = "Economic Capital",
+     main = "Economic Capital vs. PD at 99.9% CI")
+```
+
+also a plot but based on correlation
+```{r 3d}
+
+#correlation this time 
+rho_values <- seq(0.01, 0.99, length.out = 500)  
+ec_vs_rho <- sapply(rho_values, function(rho_val) vasicek_economic_capital(0.05, 0.3, rho_val, 0.999))
+
+plot(rho_values * 100, ec_vs_rho, type = "l", col = "blue", lwd = 2,
+     xlab = "Correlation (%)", ylab = "Economic Capital",
+     main = "Economic Capital vs. Correlation at 99.9% CI")
